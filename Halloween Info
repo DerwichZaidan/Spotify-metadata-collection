@@ -1,0 +1,127 @@
+!pip install spotipy
+import time
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+from google.colab import drive
+import csv
+from tqdm import tqdm
+import pandas as pd
+
+# Configuração do Google Drive
+drive.mount('/content/drive')
+
+# Configuração do cliente Spotify
+client_id = 'seu client_id'
+client_secret = 'seu client_secret'
+sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=client_id, client_secret=client_secret))
+
+# Função para coletar IDs e nomes de playlists públicas com "Halloween" no título
+def collect_public_halloween_playlists(quantidade_de_playlists):
+    playlist_info = []
+    limit = 50
+    offset = 0
+
+    with tqdm(total=quantidade_de_playlists) as pbar:
+        while len(playlist_info) < quantidade_de_playlists:
+            playlists = sp.search(q='Halloween', type='playlist', offset=offset, limit=limit)
+
+            if not playlists['playlists']['items']:
+                break
+
+            for playlist in playlists['playlists']['items']:
+                if 'halloween' in playlist['name'].lower():
+                    playlist_info.append((playlist['id'], playlist['name']))
+                    pbar.update(1)  # Atualizar a barra de progresso
+
+                    if len(playlist_info) == quantidade_de_playlists:
+                        break  # Parar a coleta quando atingir a quantidade desejada
+
+            offset += limit
+
+            if len(playlist_info) < quantidade_de_playlists:
+                time.sleep(5)  # Descanso de 5 segundos a cada lote de 50 playlists
+
+    return playlist_info
+
+# Defina a quantidade desejada de playlists a serem pesquisadas (Não exceder 900)
+quantidade_de_playlists = 666
+
+playlist_info = collect_public_halloween_playlists(quantidade_de_playlists)
+
+# Caminho para salvar o arquivo no Google Drive
+file_path = '/content/drive/My Drive/playlist_info.csv'
+
+# Salvar o arquivo como CSV
+with open(file_path, 'w', newline='', encoding='utf-8') as file:
+    writer = csv.writer(file)
+    writer.writerow(['Playlist ID', 'Nome da Playlist'])  # Cabeçalho do CSV
+    writer.writerows(playlist_info)
+
+print(f'{len(playlist_info)} Dados de playlists foram salvos com sucesso em {file_path}')
+
+# Ler o arquivo CSV com as informações das playlists
+file_path = '/content/drive/My Drive/playlist_info.csv'
+playlist_info_df = pd.read_csv(file_path)
+
+# Função para coletar informações das faixas musicais em uma playlist
+def collect_track_info(playlist_id, playlist_name):
+    track_info = []
+    try:
+        playlist = sp.playlist_tracks(playlist_id)
+
+        if playlist is None:
+            # Playlist não encontrada
+            print(f"Playlist não encontrada para o ID: {playlist_id}")
+            return track_info
+
+        if 'error' in playlist:
+            # Resposta inválida do Spotify
+            error_message = playlist.get('error', {}).get('message', 'Erro desconhecido')
+            print(f"Erro do Spotify para o ID: {playlist_id} - {error_message}")
+            return track_info
+
+        for track in playlist['items']:
+            track_name = track['track']['name']
+            duration_ms = track['track']['duration_ms']
+            artist_names = ', '.join([artist['name'] for artist in track['track']['artists']])
+            album_name = track['track']['album']['name']
+            release_date = track['track']['album']['release_date']
+
+            # Extrair apenas o ano da data de lançamento
+            release_year = release_date.split('-')[0] if release_date else ''
+
+            # Converter a duração de milissegundos para minutos e segundos
+            duration_min, duration_sec = divmod(duration_ms / 1000, 60)
+            duration_formatted = f'{int(duration_min):02d}:{int(duration_sec):02d}'
+
+            track_info.append([playlist_id, playlist_name, track_name, duration_formatted, artist_names, album_name, release_year])
+    except Exception as e:
+        print(f"Erro ao coletar informações da playlist com ID {playlist_id}: {str(e)}")
+
+    return track_info
+
+# Criar um DataFrame para armazenar as informações das faixas
+track_info_df = pd.DataFrame(columns=['Playlist ID', 'Nome da Playlist', 'Faixa', 'Duração', 'Artista(s)', 'Álbum', 'Ano'])
+
+# Coletar informações das faixas para cada playlist em lotes de 50 com intervalo de 5 segundos
+batch_size = 50
+
+# Usar tqdm para criar uma barra de progresso visual
+with tqdm(total=len(playlist_info_df)) as pbar:
+    for index, row in playlist_info_df.iterrows():
+        playlist_id = row['Playlist ID']
+        playlist_name = row['Nome da Playlist']
+        track_info = collect_track_info(playlist_id, playlist_name)
+        track_info_df = pd.concat([track_info_df, pd.DataFrame(track_info, columns=track_info_df.columns)], ignore_index=True)
+        pbar.update(1)  # Atualizar a barra de progresso
+
+        if (index + 1) % batch_size == 0 and index < len(playlist_info_df) - 1:
+            time.sleep(5)  # Intervalo de 5 segundos entre lotes
+
+# Caminho para salvar o arquivo com as informações das faixas no Google Drive
+track_file_path = '/content/drive/My Drive/tracks_info.csv'
+
+# Salvar as informações das faixas como um novo arquivo CSV
+track_info_df.to_csv(track_file_path, index=False, encoding='utf-8')
+
+print(f'{len(track_info_df)} Informações de faixas foram salvos com sucesso em {track_file_path}')
